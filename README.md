@@ -1,4 +1,4 @@
-# 🤖 Async RAG Code Update Bot
+# 🤖 Org Aware RAG Code Update Bot
 
 **AI-powered code modification assistant that uses Retrieval-Augmented Generation (RAG) to intelligently update code files based on natural language instructions.**
 
@@ -16,7 +16,7 @@ Transform this:
 ```
 
 Into this in **2-3 minutes**:
-- ✅ **Finds** similar code patterns across your entire codebase
+- ✅ **Finds** similar code patterns across your indexed codebase
 - ✅ **Generates** complete, working code following your patterns
 - ✅ **Commits** changes directly to your PR
 - ✅ **Provides** detailed code review analysis
@@ -29,7 +29,7 @@ Into this in **2-3 minutes**:
 ## 🌟 **Key Features**
 
 ### **Intelligent Code Understanding**
-- 🧠 **RAG-powered search** - Finds similar code across 7+ repositories
+- 🧠 **RAG-powered search** - Finds similar code across those indexed repositories
 - 🎯 **Vector embeddings** - Semantic similarity, not just text matching
 - 📚 **Context-aware** - Understands your coding patterns and standards
 - 🔄 **Cross-repo learning** - Applies best practices from entire organization
