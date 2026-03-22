@@ -504,16 +504,6 @@ You now have:
 
 ---
 
-## 📚 Additional Resources
-
-- **Full Documentation:** `README.md`
-- **Troubleshooting:** `TROUBLESHOOT_403.md`, `FIX_BEDROCK_ACCESS.md`
-- **Model Guide:** `FIX_USE_HAIKU_35.md`
-- **API Auth:** `API_AUTHENTICATION_GUIDE.md`
-- **Team Docs:** `CONFLUENCE_PAGE.md`
-
----
-
 **Questions?**
 - Check logs: `aws logs tail /aws/lambda/rag-code-bot-agentic-workflow --follow`
 - Run diagnostics: `./diagnose_bedrock.sh`
