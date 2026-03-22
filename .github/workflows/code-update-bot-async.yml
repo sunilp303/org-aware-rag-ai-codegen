@@ -1,0 +1,403 @@
+name: AI Code Update Bot - Async
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:  # Manual trigger for testing
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  revert-commits:
+    if: >
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/revert')
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Get PR details
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            return {
+              ref: pr.data.head.ref,
+              sha: pr.data.head.sha,
+              repo: pr.data.head.repo.full_name
+            };
+      
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ fromJSON(steps.pr.outputs.result).repo }}
+          ref: ${{ fromJSON(steps.pr.outputs.result).ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Revert commits
+        id: revert
+        run: |
+          git config --global user.name "AI Code Bot"
+          git config --global user.email "bot@github-actions"
+          
+          # Parse revert count from command
+          COMMENT="${{ github.event.comment.body }}"
+          
+          # Extract number: /revert 2 → 2, /revert → 1
+          COUNT=$(echo "$COMMENT" | grep -oP '/revert\s+\K\d+' || echo "1")
+          
+          # Safety limit
+          if [ "$COUNT" -gt 10 ]; then
+            echo "error=Cannot revert more than 10 commits at once" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Reverting last $COUNT commit(s)..."
+          
+          # Get commits to revert
+          COMMITS=$(git log --oneline -n $COUNT --pretty=format:"%h %s")
+          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          
+          # Revert commits (newest to oldest)
+          if [ "$COUNT" -eq 1 ]; then
+            # Single commit: just revert HEAD
+            git revert --no-edit HEAD
+          else
+            # Multiple commits: use range
+            git revert --no-edit HEAD~$(($COUNT-1))..HEAD
+          fi
+          
+          if [ $? -ne 0 ]; then
+            echo "error=Revert failed - conflicts detected" >> $GITHUB_OUTPUT
+            git revert --abort
+            exit 1
+          fi
+          
+          # Push changes
+          git push
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+      
+      - name: Post revert comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const success = '${{ steps.revert.outputs.success }}' === 'true';
+            const error = '${{ steps.revert.outputs.error }}';
+            const count = '${{ steps.revert.outputs.count }}';
+            const commits = `${{ steps.revert.outputs.commits }}`;
+            
+            let message = '## 🔄 Revert Commits\n\n';
+            
+            if (success) {
+              message += `### ✅ Successfully Reverted\n\n`;
+              message += `Reverted the last **${count}** commit(s):\n\n`;
+              message += '```\n' + commits + '\n```\n';
+            } else if (error) {
+              message += `### ❌ Revert Failed\n\n`;
+              message += `**Error:** ${error}\n\n`;
+              
+              if (error.includes('conflicts')) {
+                message += '**Resolution:**\n';
+                message += '1. Manually resolve conflicts locally\n';
+                message += '2. Or use `/revert 1` to revert one commit at a time\n';
+              }
+            } else {
+              message += '### ⚠️ Processing...\n';
+            }
+            
+            message += '\n---\n';
+            message += '_Use `/revert N` to revert last N commits (max 10)_';
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: message
+            });
+
+  code-update:
+    if: >
+      github.event.issue.pull_request &&
+      (contains(github.event.comment.body, '/update') || 
+      contains(github.event.comment.body, '@code-bot'))
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Get PR details
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            return {
+              ref: pr.data.head.ref,
+              sha: pr.data.head.sha,
+              repo: pr.data.head.repo.full_name
+            };
+      
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ fromJSON(steps.pr.outputs.result).repo }}
+          ref: ${{ fromJSON(steps.pr.outputs.result).ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install requests
+      
+      - name: Process code update (async)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUBMIT_ENDPOINT: ${{ secrets.SUBMIT_ENDPOINT }}
+          STATUS_ENDPOINT_TEMPLATE: ${{ secrets.STATUS_ENDPOINT_TEMPLATE }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+        run: |
+          cat > bot.py << 'ENDOFPYTHON'
+          import os
+          import json
+          import time
+          import requests
+          import re
+          import glob
+          
+          def find_file(filename):
+              """Find file recursively in repo"""
+              if os.path.exists(filename):
+                  return filename
+              
+              basename = os.path.basename(filename)
+              matches = glob.glob(f'**/{basename}', recursive=True)
+              
+              if matches:
+                  print(f"Found {basename} at: {matches[0]}")
+                  return matches[0]
+              
+              return None
+          
+          # Get comment and extract file to update
+          with open(os.environ['GITHUB_EVENT_PATH']) as f:
+              event = json.load(f)
+          
+          comment = event['comment']['body']
+          
+          # Parse command
+          match = re.search(r'/update\s+(\S+)', comment)
+          if not match:
+              print("No file specified in /update command")
+              exit(0)
+          
+          file_path = match.group(1)
+          instruction = comment.split(file_path, 1)[1].strip() if file_path in comment else "Update this file"
+          
+          # Find and read file
+          actual_path = find_file(file_path)
+          if not actual_path:
+              print(f"File not found: {file_path}")
+              exit(1)
+
+          try:
+              with open(actual_path, 'r') as f:
+                  code = f.read()
+              file_path = actual_path
+          except Exception as e:
+              print(f"Error reading {actual_path}: {e}")
+              exit(1)
+          
+          # Detect language - INCLUDES TERRAFORM!
+          ext = file_path.split('.')[-1]
+          lang_map = {
+              'py': 'python', 'js': 'javascript', 'ts': 'typescript',
+              'java': 'java', 'go': 'go', 'rb': 'ruby', 'sh': 'bash',
+              'cpp': 'cpp', 'c': 'c', 'rs': 'rust',
+              'tf': 'terraform', 'tfvars': 'terraform', 'hcl': 'hcl'
+          }
+          language = lang_map.get(ext, 'text')
+          
+          print(f"Processing: {file_path}")
+          print(f"Language: {language}")
+          print(f"Instruction: {instruction}")
+          
+          # Submit job
+          submit_url = os.environ['SUBMIT_ENDPOINT']
+          api_key = os.environ['MODEL_API_KEY']
+          
+          response = requests.post(
+              submit_url,
+              headers={'x-api-key': api_key, 'Content-Type': 'application/json'},
+              json={
+                  'comment': instruction,
+                  'code': code,
+                  'file_path': file_path,
+                  'language': language,
+                  'repo': os.environ.get('GITHUB_REPOSITORY', 'unknown/repo')
+              },
+              timeout=30
+          )
+          
+          if response.status_code != 202:
+              print(f"Failed to submit job: {response.status_code}")
+              print(response.text)
+              exit(1)
+          
+          result = response.json()
+          job_id = result['job_id']
+          
+          print(f"Job submitted: {job_id}")
+          
+          # Poll for results
+          status_template = os.environ['STATUS_ENDPOINT_TEMPLATE']
+          status_url = status_template.replace('{id}', job_id)
+          
+          max_time = 300
+          start = time.time()
+          
+          while time.time() - start < max_time:
+              time.sleep(3)
+              
+              status_response = requests.get(status_url, headers={'x-api-key': api_key}, timeout=10)
+              
+              if status_response.status_code != 200:
+                  continue
+              
+              status = status_response.json()
+              current_status = status.get('status')
+              
+              print(f"Status: {current_status}")
+              
+              if current_status == 'completed':
+                  # Get updated code
+                  updated_code = status.get('updated_code', '')
+
+                  # Strip the markers if they're still there
+                  if '===BEGIN CODE===' in updated_code:
+                      begin_idx = updated_code.find('===BEGIN CODE===')
+                      end_idx = updated_code.find('===END CODE===')
+                      if begin_idx != -1 and end_idx != -1 and end_idx > begin_idx:
+                          updated_code = updated_code[begin_idx + len('===BEGIN CODE==='):end_idx].strip()
+
+                  # Remove CONFIDENCE/EXPLANATION lines from top
+                  lines = updated_code.split('\n')
+                  cleaned_lines = []
+                  for line in lines:
+                      if not line.startswith('CONFIDENCE:') and not line.startswith('EXPLANATION:'):
+                          cleaned_lines.append(line)
+                  updated_code = '\n'.join(cleaned_lines).strip()
+                  
+                  # Clean markdown code blocks
+                  if updated_code.startswith('```'):
+                      lines = updated_code.split('\n')
+                      if lines[0].strip().startswith('```'):
+                          lines = lines[1:]
+                      if lines and lines[-1].strip() == '```':
+                          lines = lines[:-1]
+                      updated_code = '\n'.join(lines).strip()
+                  
+                  # Strip language markers
+                  lang_markers = ['yaml', 'hcl', 'terraform', 'python', 'bash', 'javascript', 'typescript']
+                  for marker in lang_markers:
+                      if updated_code.startswith(marker + '\n'):
+                          updated_code = updated_code[len(marker)+1:].strip()
+                      if updated_code.startswith(marker + ' '):
+                          updated_code = updated_code[len(marker)+1:].strip()
+                  
+                  with open(file_path, 'w') as f:
+                      f.write(updated_code)
+                  
+                  with open('bot_result.json', 'w') as f:
+                      json.dump({
+                          'success': True,
+                          'file_path': file_path,
+                          'confidence': int(status.get('confidence', 0)),
+                          'explanation': status.get('explanation', '')  # Keep full analysis
+                      }, f)
+                  
+                  exit(0)
+              
+              elif current_status == 'failed':
+                  print(f"Job failed: {status.get('error')}")
+                  with open('bot_result.json', 'w') as f:
+                      json.dump({'success': False, 'error': status.get('error'), 'file_path': file_path}, f)
+                  exit(1)
+          
+          print("Timeout")
+          exit(1)
+          ENDOFPYTHON
+          
+          python bot.py
+      
+      - name: Commit changes
+        if: success()
+        run: |
+          git config --global user.name "AI Code Bot"
+          git config --global user.email "bot@github-actions"
+          
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "🤖 AI Code Update: Applied async job results"
+            git push
+            echo "Changes committed"
+          else
+            echo "No changes to commit"
+          fi
+      
+      - name: Post result comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let message = '## 🤖 AI Code Update Results (Async)\n\n';
+            
+            if (fs.existsSync('bot_result.json')) {
+              const result = JSON.parse(fs.readFileSync('bot_result.json', 'utf8'));
+              
+              if (result.success) {
+                message += `### ✅ Successfully Updated\n`;
+                message += `- **File:** \`${result.file_path}\`\n`;
+                message += `- **Confidence:** ${result.confidence}%\n`;
+                message += `\n**Explanation:**\n${result.explanation}\n`;
+              } else {
+                message += `### ❌ Failed\n`;
+                message += `- **Error:** ${result.error}\n`;
+              }
+            } else {
+              message += '✅ Processing completed\n';
+            }
+            
+            message += '\n---\n';
+            message += '_Powered by AI RAG Bot + AWS Bedrock Claude Opus 4.5_\n';
+            message += '_Commands: `/update <file>` • `/revert [N]`_';
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: message
+            });

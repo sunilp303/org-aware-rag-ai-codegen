@@ -1,0 +1,7 @@
+{
+  "repositories": [
+    "sunilp303/tenable-ai-remediation",
+    "sunilp303/bedrock-claude-api",
+    "sunilp303/github-sbom-generator"
+  ]
+}
