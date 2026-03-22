@@ -62,7 +62,7 @@ Developer ← GitHub ← GitHub Actions ← DynamoDB ← Lambda Worker → Auror
 - **Submit Lambda** - Creates job, returns in <1s
 - **SQS Queue** - Decouples submission from processing  
 - **Worker Lambda** - RAG search + Claude AI processing
-- **Aurora pgvector** - Stores embeddings of 371+ files
+- **Aurora pgvector** - Stores embeddings of 1000+ files
 - **DynamoDB** - Job state and results storage
 
 ---
