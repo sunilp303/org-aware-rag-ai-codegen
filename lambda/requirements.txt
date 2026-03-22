@@ -1,0 +1,14 @@
+# AWS-Native Requirements
+
+# AWS SDK
+boto3>=1.29.0
+botocore>=1.32.0
+
+# PostgreSQL with psycopg2-binary (includes libpq)
+psycopg2-binary>=2.9.9
+
+# HTTP requests
+requests>=2.31.0
+
+# For local testing
+python-dotenv>=1.0.0
