@@ -73,8 +73,8 @@ Developer ← GitHub ← GitHub Actions ← DynamoDB ← Lambda Worker → Auror
 
 ```bash
 # Clone and deploy
-git clone https://github.com/sunilp303/github-ai-assistant.git
-cd github-ai-assistant/terraform
+git clone https://github.com/sunilp303/org-aware-rag-ai-codegen.git
+cd org-aware-rag-ai-codegen/terraform
 terraform init
 terraform apply -auto-approve
 
@@ -82,7 +82,7 @@ terraform apply -auto-approve
 export SUBMIT_ENDPOINT=$(terraform output -raw submit_endpoint)
 export STATUS_ENDPOINT=$(terraform output -raw status_endpoint_template)
 export API_KEY=$(aws secretsmanager get-secret-value \
-  --secret-id github-ai-assistant/api-key \
+  --secret-id org-aware-rag-ai-codegen/api-key \
   --query SecretString --output text)
 ```
 
